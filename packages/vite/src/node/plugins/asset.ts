@@ -325,6 +325,12 @@ function isGitLfsPlaceholder(content: Buffer): boolean {
   // Check whether the content begins with the characteristic string of Git LFS placeholders
   return GIT_LFS_PREFIX.compare(content, 0, GIT_LFS_PREFIX.length) === 0
 }
+// spaces in not supported in srcset
+const svgDataURISupportedHexCode: Record<string, string> = {
+  '%3D': '=',
+  '%3A': ':',
+  '%2F': '/',
+}
 
 /**
  * Register an asset to be emitted as part of the bundle (if necessary)
@@ -352,7 +358,8 @@ async function fileToBuiltUrl(
   let url: string
   if (
     config.build.lib ||
-    (!file.endsWith('.svg') &&
+    // Don't inline SVG with fragments, as they are meant to be reused
+    (!(file.endsWith('.svg') && id.includes('#')) &&
       !file.endsWith('.html') &&
       content.length < Number(config.build.assetsInlineLimit) &&
       !isGitLfsPlaceholder(content))
@@ -363,9 +370,27 @@ async function fileToBuiltUrl(
       )
     }
 
-    const mimeType = mrmime.lookup(file) ?? 'application/octet-stream'
-    // base64 inlined as a string
-    url = `data:${mimeType};base64,${content.toString('base64')}`
+    if (file.endsWith('.svg')) {
+      let dataUri = content.toString()
+      // If the SVG contains some text any transformation is unsafe, and given that double quotes would then
+      // need to be escaped, the gain to use a data URI would be ridiculous if not negative
+      if (dataUri.includes('<text')) {
+        url = `data:image/svg+xml;base64,${content.toString('base64')}`
+      } else {
+        // Simplified version of https://github.com/tigt/mini-svg-data-uri without colors minification
+        // This kind of minification should be done ahead of time or with a plugin with other optimizations (using svgo for example)
+        dataUri = dataUri.trim().replace(/\s+/g, ' ').replaceAll('"', "'")
+        dataUri = encodeURIComponent(dataUri).replace(
+          /%[\dA-F]{2}/g,
+          (match) => svgDataURISupportedHexCode[match] || match.toLowerCase(),
+        )
+        url = 'data:image/svg+xml,' + dataUri
+      }
+    } else {
+      const mimeType = mrmime.lookup(file) ?? 'application/octet-stream'
+      // base64 inlined as a string
+      url = `data:${mimeType};base64,${content.toString('base64')}`
+    }
   } else {
     // emit as asset
     const { search, hash } = parseUrl(id)
